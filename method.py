@@ -53,7 +53,7 @@ config['num_workers']=4
 class Squeeze_Excite(nn.Module):
     def __init__(self,channels,reduction):
         super().__init__()
-        self.avgpool = nn.AdaptivePool2d(1)
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels,channels//reduction,bias=False),
             nn.ReLU(inplace=True),
@@ -85,3 +85,98 @@ class VGGBlock(nn.Module):
         out = self.relu(out)
         out = self.SE(out)
         return(out)
+def output_block():
+    Layer = nn.Sequential(
+        nn.Conv2d(in_channels=32,out_channels=1,kernel_size=(1,1)),
+        nn.Sigmoid()
+    )
+    return Layer
+class DoubleUNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = VGGBlock(3,64,64)
+        self.conv2 = VGGBlock(64,128,128)
+        self.conv3 = VGGBlock(128,256,256)
+        self.conv4 = VGGBlock(256,512,512)
+        self.conv5 = VGGBlock(512,512,512)
+
+        self.pool = nn.MaxPool2d(2,2)
+        self.up = nn.Upsample(scale_factor=2,mode='bilinear')
+        self.Vgg1 = VGGBlock(1024,256,256)
+        self.Vgg2 = VGGBlock(512,128,128)
+        self.Vgg3 = VGGBlock(256,64,64)
+        self.Vgg4 = VGGBlock(128,32,32)
+
+        self.out = output_block()
+
+        self.conv11 = VGGBlock(6,32,32)
+        self.conv12 = VGGBlock(32,64,64)
+        self.conv13 = VGGBlock(64,128,128)
+        self.conv14 = VGGBlock(128,256,256)
+
+        self.Vgg5 = VGGBlock(1024,256,256)
+        self.Vgg6 = VGGBlock(640,128,128)
+        self.Vgg7 = VGGBlock(320,64,64)
+        self.Vgg8 = VGGBlock(160,32,32)
+
+        self.out1 = nn.Conv2d(in_channels=32,out_channels=1,kernel_size=(1,1))
+    def forward(self,x):
+        x1 = self.conv1(x)
+
+        x2 = self.conv2(self.pool(x1))
+        x3 = self.conv3(self.pool(x2))
+        x4 = self.conv4(self.pool(x3))
+        x5 = self.conv5(self.pool(x4))
+
+        x5 = self.up(x5)
+        x5  = torch.cat([x5,x4],1)
+        x6 = self.Vgg1(x5)
+
+        x6 = self.up(x6)
+        x6 = torch.cat([x6,x3],1)
+        x7 = self.Vgg2(x6)
+
+        x7 = self.up(x7)
+        x7 = torch.cat([x7,x2],1)
+        x8 = self.Vgg3(x7)
+
+        x8 = self.up(x8)
+        x8 = torch.cat([x8,x1],1)
+        x9 = self.Vgg4(x8)
+
+        output1 = self.out(x9)
+        output1 = x*output1
+        x = torch.cat([x,output1],1)
+        x11 = self.conv11(x)
+        x12 = self.conv12(self.pool(x11))
+        x13 = self.conv13(self.pool(x12))
+        x14 = self.conv14(self.pool(x13))
+
+        y = self.pool(x14)
+
+        y = self.up(y)
+        y = torch.cat([y,x14,x4],1)
+        y = self.Vgg5(y)
+
+
+        y = self.up(y)
+        y = torch.cat([y,x13,x3],1)
+        y = self.Vgg6(y)
+
+        y = self.up(y)
+        y = torch.cat([y,x12,x2],1)
+        y = self.Vgg7(y)
+
+        y = self.up(y)
+        y = torch.cat([y,x11,x1],1)
+        y = self.Vgg8(y)
+
+        output2 = self.out1(y)
+        return output2
+
+
+model = DoubleUNet()
+torch.save(model.state_dict(),'doubleunet.pth')
+x = torch.randn(1,3,128,128)
+
+print(model(x).size())
